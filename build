@@ -3,5 +3,5 @@
 echo "gcc -Wall -c main.c"
 gcc -Wall -c main.c 
 echo "gcc main.o -o gShell -lreadline"
-gcc main.o -o gShell -lreadline
+gcc main.o -o gShellv2 -lreadline
 clear

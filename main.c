@@ -8,11 +8,12 @@
 #include<readline/history.h> 
 
 // Clearing the shell using escape sequences 
+#define MAX_COMMANDS 100		// max supported commands
 #define clear() printf("\033[H\033[J")
 
 void init_shell() {
     clear();  
-    printf("\n=============gShell v.0.1=============");  
+    printf("\n=============gShell v.0.6=============");  
     char* username = getenv("USER"); 
     printf("\n\nLogged in as: @%s", username); 
     printf("\n"); 
@@ -27,33 +28,212 @@ void print_directory(){
     printf("\n%s> ", cwd);
 }
 
-char* get_user_input() {
-    char *line;
-    size_t buffer_size = 0;
+// getting user input
+int get_input(char *str) {
+	char *buffer;
 
-    getline(&line, &buffer_size, stdin);
-    printf("\nInput: %s", line);
-    add_history(line);
-    return line;
+	buffer = readline(" > ");
+	if (strlen(buffer) != 0) {
+		add_history(buffer);
+		strcpy(str, buffer);
+		return 0;
+	} else {
+		return 1;
+	}
+}
+
+// find commands in user input
+void parse_commands(char *str, char **parsed) {
+	
+	int i;
+	for (i = 0; i < MAX_COMMANDS; i++) {
+		parsed[i] = strsep(&str, " ");
+
+		if (parsed[i] == NULL)
+			break;
+		if (strlen(parsed[i]) == 0)
+			i--;			
+	}
+}
+
+// used to find pipes in user input
+int parse_pipes(char *str, char ** str_piped) {
+	
+	int i;
+	for (i = 0; i < 2; i++) {
+		str_piped[i] = strsep(&str, "|");
+		if (str_piped[i] == NULL)
+			break;
+	}
+
+	if (str_piped[1] == NULL) {
+		return 0;		// no pipes were found
+	} else {
+		return 1;		// found some pipes
+	}
+	
+}
+
+int execute_builtins(char **parsed) {
+		
+	int no_of_builtins = 2, switch_args = 0;
+	int i;
+
+	char *listOfBuiltins[no_of_builtins];
+
+	listOfBuiltins[0] = "exit";
+	listOfBuiltins[1] = "cd";
+
+	for (i = 0; i < no_of_builtins; i++) {
+		if (strcmp(parsed[0], listOfBuiltins[i]) == 0) {
+			switch_args = i + 1;
+		}
+	}
+
+	switch(switch_args){
+		case 1:
+			exit(0);
+		case 2:
+			chdir(parsed[1]);
+			return 1;
+		default:
+			break;
+	}
+
+	return 0;
+}
+
+int process_user_input(char *str, char **parsed, char **parsed_piped) {
+	
+	char *strpiped[2];
+	int piped = 0;
+
+	piped = parse_pipes(str, strpiped);
+
+	if (piped) {
+		parse_commands(strpiped[0], parsed);
+		parse_commands(strpiped[1], parsed_piped);
+	} else {
+		parse_commands(str, parsed);
+	}
+
+	if (execute_builtins(parsed)) {
+		return 0;
+	} else {
+		return 1 + piped;
+	}
+}
+
+void execute_commands(char **parsed) {
+	
+	// fork a child
+	pid_t pid = fork();
+
+	if (pid == -1) {
+		printf("\n Failed to fork a child.");
+		return;
+	} else if (pid == 0) {
+		if (execvp(parsed[0], parsed) < 0) {
+			printf("\nCould not execute command.");
+		}
+		exit(0);
+	} else {
+		// wait for child to terminate
+		wait(NULL);
+		return;
+	}
+
+}
+
+// executing piped system commands
+void execute_piped_commands(char **parsed, char **parsed_pipes) {
+	
+	// 0 is read end, 1 is write end
+	int pipefd[2];
+	pid_t p1, p2; 		// parent process id's
+
+	if (pipe(pipefd) < 0) {
+		printf("\n Can't initialize pipe.");
+		return;
+	}
+
+	p1 = fork();		//creating child process
+	if (p1 < 0) {
+		printf("\n fork() call failed while trying to execute pipe operators.");
+		return;
+	}
+
+	// execute first child
+	// only needs to write at the write end 	
+	if (p1 == 0) {
+		close(pipefd[0]);
+		dup2(pipefd[1], STDOUT_FILENO);
+		close(pipefd[1]);
+
+		if (execvp(parsed[0], parsed) < 0) {
+			printf("\n Failed to execute command 1..");
+			exit(0);
+		}
+	} else {
+		// parent executing
+		p2 = fork();
+
+		if (p2 < 0) {
+			printf("\n fork() call failed while trying to execute pipe operators.");
+			return;
+		}
+
+		// child2 executing
+		// only needs to read at the read end
+		if (p2 == 0) {
+
+			close(pipefd[1]);
+			dup2(pipefd[0], STDIN_FILENO);
+			close(pipefd[0]);
+			if (execvp(parsed_pipes[0], parsed_pipes) < 0) {
+				printf("\n Failed to execute command 2..");
+				exit(0);
+			}
+		} else {
+			//parent executing, waiting for both children
+			wait(NULL);
+			wait(NULL);
+		}
+
+	}
+
 }
 
 int main() 
 { 
-    char *user_input;  
+    char user_input[1000];
+	char *parsed_arguments[MAX_COMMANDS], *parsed_arguments_piped[MAX_COMMANDS];
+ 	int execution_flag = 0;			// 0 -  no command or builtin; 1 - simple command; 2 - includes pipe operator
+
+	// start shell 
     init_shell(); 
   
     while (1) { 
         // print shell line 
         print_directory(); 
         // take input
-        user_input = get_user_input();
-        if (user_input != NULL && (*user_input) != '\0') 
-            continue;
+        //user_input = get_user_input();
 
-        // TODO:
-        // Input string processing
-        // Command execution
-        // Handling built-in commands and pipes 
+        if (get_input(user_input)) {
+            continue;		
+		}
+
+		execution_flag = process_user_input(user_input, parsed_arguments, parsed_arguments_piped);
+		// returns zero if there's no command or it's a builtin
+		// 1 if it is a simple command
+		// 2 if it includes a pipe
+
+		// execute
+		if (execution_flag == 1) {
+			execute_commands(parsed_arguments);
+		} else if (execution_flag == 2) {
+			execute_piped_commands(parsed_arguments, parsed_arguments_piped);
+		}
          
     } 
    
