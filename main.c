@@ -44,8 +44,6 @@ int get_input(char *str) {
 
 // find commands in user input
 void parse_commands(char *str, char **parsed) {
-	
-	//printf("\nstr in parse_commands: %s", str);
 
 	int i;
 	for (i = 0; i < MAX_COMMANDS; i++) {
@@ -57,25 +55,16 @@ void parse_commands(char *str, char **parsed) {
 			i--;			
 	}
 
-	for (int j = 0; j < (sizeof(parsed)/sizeof(parsed[0])); j++) {
-		//printf("\nparsed: %s", parsed[j]);
-	}
 }
 
 // used to find pipes in user input
 int parse_pipes(char *str, char **str_piped) {
-	
-	//printf("\nstr in parse_pipes: %s", str);
 
 	int i;
 	for (i = 0; i < 2; i++) {
 		str_piped[i] = strsep(&str, "|");
 		if (str_piped[i] == NULL)
 			break;
-	}
-
-	for (int j = 0; j < (sizeof(str_piped)/sizeof(str_piped[0])); j++) {
-		//printf("\n parsed in parse_pipes: %s", str_piped[j]);
 	}
 
 	if (str_piped[1] == NULL) {
@@ -121,14 +110,11 @@ int process_user_input(char *str, char **parsed, char **parsed_piped) {
 	int piped = 0;
 
 	piped = parse_pipes(str, strpiped);
-	//printf("\npiped: %d", piped);
 
 	if (piped) {
-		//printf("\npiped input");
 		parse_commands(strpiped[0], parsed);
 		parse_commands(strpiped[1], parsed_piped);
 	} else {
-		//printf("\nnon-piped input");
 		parse_commands(str, parsed);
 	}
 
@@ -145,11 +131,11 @@ void execute_commands(char **parsed) {
 	pid_t pid = fork();
 
 	if (pid == -1) {
-		//printf("\n Failed to fork a child.");
+		printf("\n Failed to fork a child.");
 		return;
 	} else if (pid == 0) {
 		if (execvp(parsed[0], parsed) < 0) {
-			//printf("\nCould not execute command.");
+			printf("\nCould not execute command.");
 		}
 		exit(0);
 	} else {
@@ -168,13 +154,13 @@ void execute_piped_commands(char **parsed, char **parsed_pipes) {
 	pid_t p1, p2; 		// parent process id's
 
 	if (pipe(pipefd) < 0) {
-		//printf("\n Can't initialize pipe.");
+		printf("\n Can't initialize pipe.");
 		return;
 	}
 
 	p1 = fork();		//creating child process
 	if (p1 < 0) {
-		//printf("\n fork() call failed while trying to execute pipe operators.");
+		printf("\n fork() call failed while trying to execute pipe operators.");
 		return;
 	}
 
@@ -184,9 +170,9 @@ void execute_piped_commands(char **parsed, char **parsed_pipes) {
 		close(pipefd[0]);
 		dup2(pipefd[1], STDOUT_FILENO);
 		close(pipefd[1]);
-		//printf("\nfirst child process");
+
 		if (execvp(parsed[0], parsed) < 0) {
-			//printf("\n Failed to execute command 1..");
+			printf("\n Failed to execute command 1..");
 			exit(0);
 		}
 	} else {
@@ -194,7 +180,7 @@ void execute_piped_commands(char **parsed, char **parsed_pipes) {
 		p2 = fork();
 
 		if (p2 < 0) {
-			//printf("\n fork() call failed while trying to execute pipe operators.");
+			printf("\n fork() call failed while trying to execute pipe operators.");
 			return;
 		}
 
@@ -205,10 +191,9 @@ void execute_piped_commands(char **parsed, char **parsed_pipes) {
 			close(pipefd[1]);
 			dup2(pipefd[0], STDIN_FILENO);
 			close(pipefd[0]);
-			//printf("\nsecond child process");
 
 			if (execvp(parsed_pipes[0], parsed_pipes) < 0) {
-				//printf("\n Failed to execute command 2..");
+				printf("\n Failed to execute command 2..");
 				exit(0);
 			}
 		} else {
