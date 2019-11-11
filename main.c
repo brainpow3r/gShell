@@ -178,31 +178,36 @@ int spawn_process(int in, int out, struct command *cmd) {
 			dup2(out, 1);
 			close(out);
 		}
-
+		printf("\nin, out: %i, %i", in, out);
 		if (execvp(cmd->argv[0], (char * const *)cmd->argv) < 0) {
 			printf("\nCould not execute command.");
 		}
 		exit(0);
+	} else if (pid > 0) {
+		wait(NULL);
 	}
+
 	return pid;
 }
 
 void fork_pipes(int n, struct command *cmd) {
 	int i;
-	int in, in_original, fd[2];
+	pid_t pid;
+	int in, fd[2];
 
 	// first process gets input from original file descriptor 0
 	in = 0;
-	// spawn all but las stage of pipe
+	// spawn all but last stage of pipe
 	for (i = 0; i < n - 1; ++i) {
 		pipe(fd);
-		if (i == 0)
-			in_original = fd[0];
-		printf("\nfd[0], fd[1]: %i, %i", fd[0], fd[1]);
-		printf("\nin ->  i: %i, %i", in, i);
-		// fd[1] is the write end of the pipe we carry 'in' from prev iteration
-		spawn_process(in, fd[1], cmd + i);
 
+		// printf("\nfd[0], fd[1]: %i, %i", fd[0], fd[1]);
+		// printf("\nin ->  i: %i, %i", in, i);
+		// fd[1] is the write end of the pipe we carry 'in' from prev iteration
+		pid = spawn_process(in, fd[1], cmd + i);
+		if (pid == 0) {
+			wait(NULL);
+		}
 		// child will write here
 		close(fd[1]);
 
@@ -213,79 +218,23 @@ void fork_pipes(int n, struct command *cmd) {
 	// last piping stage - set stdin to be read end of previous pipe and output to original file descr 1
 	if (in != 0) {
 		printf("\nIN: %i", in);
-		dup2(in, in_original);
+		dup2(in, 0);
 
-		//close(fd[0]);
+		close(fd[1]);
+		close(in);
+		in = fd[0];
 	}
 	if (execvp(cmd[i].argv[0], (char * const *)cmd[i].argv) < 0) {
 		printf("\nCould not execute command.");
+		exit(0);
 	}
 	wait(NULL);
-	exit(0);
 } 
 
-// NOT USED ANYMORE
-// executing piped system commands
-// void execute_piped_commands(char **parsed, char **parsed_pipes) {
-	
-// 	// 0 is read end, 1 is write end
-// 	int pipefd[2];
-// 	pid_t p1, p2; 		// parent process id's
-
-// 	if (pipe(pipefd) < 0) {
-// 		printf("\n Can't initialize pipe.");
-// 		return;
-// 	}
-
-// 	p1 = fork();		//creating child process
-// 	if (p1 < 0) {
-// 		printf("\n fork() call failed while trying to execute pipe operators.");
-// 		return;
-// 	}
-
-// 	// execute first child
-// 	// only needs to write at the write end 	
-// 	if (p1 == 0) {
-// 		close(pipefd[0]);
-// 		dup2(pipefd[1], STDOUT_FILENO);
-// 		close(pipefd[1]);
-
-// 		if (execvp(parsed[0], parsed) < 0) {
-// 			printf("\n Failed to execute command 1..");
-// 			exit(0);
-// 		}
-// 	} else {
-// 		// parent executing
-// 		p2 = fork();
-
-// 		if (p2 < 0) {
-// 			printf("\n fork() call failed while trying to execute pipe operators.");
-// 			return;
-// 		}
-
-// 		// child2 executing
-// 		// only needs to read at the read end
-// 		if (p2 == 0) {
-
-// 			close(pipefd[1]);
-// 			dup2(pipefd[0], STDIN_FILENO);
-// 			close(pipefd[0]);
-
-// 			if (execvp(parsed_pipes[0], parsed_pipes) < 0) {
-// 				printf("\n Failed to execute command 2..");
-// 				exit(0);
-// 			}
-// 		} else {
-// 			//parent executing, waiting for both children
-// 			close(pipefd[0]);
-// 			close(pipefd[1]);
-// 			wait(NULL);
-// 			wait(NULL);
-// 		}
-
-// 	}
-
-// }
+void signal_handler(int signum)
+{
+	printf("Received signal %d\n", signum);
+}
 
 int main() 
 { 
@@ -299,6 +248,11 @@ int main()
 	// start shell 
     init_shell(); 
   
+	for(int i=1;i<=64;i++) {
+		if (i != 17)
+  			signal(i, signal_handler);
+	}
+
     while (1) { 
         // print shell line 
         print_directory(); 
@@ -321,8 +275,9 @@ int main()
 		
 		if (execution_flag == 2) {
 			fork_pipes(*ptr_no_p_cmd, cmd);
-			wait(NULL);
-			wait(NULL);
+			// for (int i = 0; i < *ptr_no_p_cmd; i++) {
+			// 	wait(NULL);
+			// }
 		}
          
     } 
