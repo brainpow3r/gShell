@@ -1,4 +1,4 @@
-#include "stdio.h"
+#include<stdio.h>
 #include<string.h> 
 #include<stdlib.h> 
 #include<unistd.h> 
@@ -11,13 +11,18 @@
 #define MAX_COMMANDS 100		// max supported commands
 #define clear() printf("\033[H\033[J")
 
+struct command {
+	char *argv[10];
+	int num_of_tokens;
+};
+
 void init_shell() {
     clear();  
     printf("\n=============gShell v.0.6=============");  
     char* username = getenv("USER"); 
     printf("\n\nLogged in as: @%s", username); 
     printf("\n"); 
-    sleep(3); 
+    sleep(0.5); 
     clear();
 }
 
@@ -42,6 +47,19 @@ int get_input(char *str) {
 	}
 }
 
+void parse_commands_for_pipes(struct command *cmd, int command_number, char *str) {
+		int j = 0;
+		for (j = 0; j < MAX_COMMANDS; j++) {
+			cmd[command_number].argv[j] = strsep(&(str), " ");
+			if (cmd[command_number].argv[j] == NULL)
+				break;
+			if (strlen(cmd[command_number].argv[j]) == 0)
+				j--;			
+		}
+		cmd[command_number].num_of_tokens = j;
+
+}
+
 // find commands in user input
 void parse_commands(char *str, char **parsed) {
 
@@ -58,14 +76,16 @@ void parse_commands(char *str, char **parsed) {
 }
 
 // used to find pipes in user input
-int parse_pipes(char *str, char **str_piped) {
+int parse_pipes(char *str, char **str_piped, int *no_piped_cmd) {
 
 	int i;
-	for (i = 0; i < 2; i++) {
+	for (i = 0; i < 100; i++) {
 		str_piped[i] = strsep(&str, "|");
 		if (str_piped[i] == NULL)
 			break;
 	}
+
+	*no_piped_cmd = i;
 
 	if (str_piped[1] == NULL) {
 		return 0;		// no pipes were found
@@ -104,21 +124,20 @@ int execute_builtins(char **parsed) {
 	return 0;
 }
 
-int process_user_input(char *str, char **parsed, char **parsed_piped) {
+int process_user_input(char *str, char **parsed, char **parsed_piped, int *no_piped_cmd, struct command *cmd) {
 	
-	char *strpiped[2];
+	char *strpiped[100];
 	int piped = 0;
+	piped = parse_pipes(str, strpiped, no_piped_cmd);
 
-	piped = parse_pipes(str, strpiped);
-
-	if (piped) {
-		parse_commands(strpiped[0], parsed);
-		parse_commands(strpiped[1], parsed_piped);
-	} else {
-		parse_commands(str, parsed);
+	for (int i = 0; i < *no_piped_cmd; i++) {
+		parse_commands_for_pipes(cmd, i, strpiped[i]);
 	}
 
-	if (execute_builtins(parsed)) {
+
+	parse_commands(str, parsed);
+
+	if (execute_builtins(cmd[0].argv)) {
 		return 0;
 	} else {
 		return 1 + piped;
@@ -146,73 +165,136 @@ void execute_commands(char **parsed) {
 
 }
 
-// executing piped system commands
-void execute_piped_commands(char **parsed, char **parsed_pipes) {
-	
-	// 0 is read end, 1 is write end
-	int pipefd[2];
-	pid_t p1, p2; 		// parent process id's
+int spawn_process(int in, int out, struct command *cmd) {
+	pid_t pid;			// spawned process id
 
-	if (pipe(pipefd) < 0) {
-		printf("\n Can't initialize pipe.");
-		return;
-	}
-
-	p1 = fork();		//creating child process
-	if (p1 < 0) {
-		printf("\n fork() call failed while trying to execute pipe operators.");
-		return;
-	}
-
-	// execute first child
-	// only needs to write at the write end 	
-	if (p1 == 0) {
-		close(pipefd[0]);
-		dup2(pipefd[1], STDOUT_FILENO);
-		close(pipefd[1]);
-
-		if (execvp(parsed[0], parsed) < 0) {
-			printf("\n Failed to execute command 1..");
-			exit(0);
-		}
-	} else {
-		// parent executing
-		p2 = fork();
-
-		if (p2 < 0) {
-			printf("\n fork() call failed while trying to execute pipe operators.");
-			return;
+	if ( (pid = fork()) == 0 ) {
+		if (in != 0) {
+			dup2(in, 0);
+			close(in);
 		}
 
-		// child2 executing
-		// only needs to read at the read end
-		if (p2 == 0) {
-
-			close(pipefd[1]);
-			dup2(pipefd[0], STDIN_FILENO);
-			close(pipefd[0]);
-
-			if (execvp(parsed_pipes[0], parsed_pipes) < 0) {
-				printf("\n Failed to execute command 2..");
-				exit(0);
-			}
-		} else {
-			//parent executing, waiting for both children
-			close(pipefd[0]);
-			close(pipefd[1]);
-			wait(NULL);
-			wait(NULL);
+		if (out != 1) {
+			dup2(out, 1);
+			close(out);
 		}
 
+		if (execvp(cmd->argv[0], (char * const *)cmd->argv) < 0) {
+			printf("\nCould not execute command.");
+		}
+		exit(0);
 	}
-
+	return pid;
 }
+
+void fork_pipes(int n, struct command *cmd) {
+	int i;
+	int in, in_original, fd[2];
+
+	// first process gets input from original file descriptor 0
+	in = 0;
+	// spawn all but las stage of pipe
+	for (i = 0; i < n - 1; ++i) {
+		pipe(fd);
+		if (i == 0)
+			in_original = fd[0];
+		printf("\nfd[0], fd[1]: %i, %i", fd[0], fd[1]);
+		printf("\nin ->  i: %i, %i", in, i);
+		// fd[1] is the write end of the pipe we carry 'in' from prev iteration
+		spawn_process(in, fd[1], cmd + i);
+
+		// child will write here
+		close(fd[1]);
+
+		// keep read end of pipe, next child will read from there
+		in = fd[0];
+		
+	}
+	// last piping stage - set stdin to be read end of previous pipe and output to original file descr 1
+	if (in != 0) {
+		printf("\nIN: %i", in);
+		dup2(in, in_original);
+
+		//close(fd[0]);
+	}
+	if (execvp(cmd[i].argv[0], (char * const *)cmd[i].argv) < 0) {
+		printf("\nCould not execute command.");
+	}
+	wait(NULL);
+	exit(0);
+} 
+
+// NOT USED ANYMORE
+// executing piped system commands
+// void execute_piped_commands(char **parsed, char **parsed_pipes) {
+	
+// 	// 0 is read end, 1 is write end
+// 	int pipefd[2];
+// 	pid_t p1, p2; 		// parent process id's
+
+// 	if (pipe(pipefd) < 0) {
+// 		printf("\n Can't initialize pipe.");
+// 		return;
+// 	}
+
+// 	p1 = fork();		//creating child process
+// 	if (p1 < 0) {
+// 		printf("\n fork() call failed while trying to execute pipe operators.");
+// 		return;
+// 	}
+
+// 	// execute first child
+// 	// only needs to write at the write end 	
+// 	if (p1 == 0) {
+// 		close(pipefd[0]);
+// 		dup2(pipefd[1], STDOUT_FILENO);
+// 		close(pipefd[1]);
+
+// 		if (execvp(parsed[0], parsed) < 0) {
+// 			printf("\n Failed to execute command 1..");
+// 			exit(0);
+// 		}
+// 	} else {
+// 		// parent executing
+// 		p2 = fork();
+
+// 		if (p2 < 0) {
+// 			printf("\n fork() call failed while trying to execute pipe operators.");
+// 			return;
+// 		}
+
+// 		// child2 executing
+// 		// only needs to read at the read end
+// 		if (p2 == 0) {
+
+// 			close(pipefd[1]);
+// 			dup2(pipefd[0], STDIN_FILENO);
+// 			close(pipefd[0]);
+
+// 			if (execvp(parsed_pipes[0], parsed_pipes) < 0) {
+// 				printf("\n Failed to execute command 2..");
+// 				exit(0);
+// 			}
+// 		} else {
+// 			//parent executing, waiting for both children
+// 			close(pipefd[0]);
+// 			close(pipefd[1]);
+// 			wait(NULL);
+// 			wait(NULL);
+// 		}
+
+// 	}
+
+// }
 
 int main() 
 { 
     char user_input[1000];
 	char *parsed_arguments[MAX_COMMANDS], *parsed_arguments_piped[MAX_COMMANDS];
  	int execution_flag = 0;			// 0 -  no command or builtin; 1 - simple command; 2 - includes pipe operator
+	int no_parsed_cmd = 0;
+	struct command cmd[100] = {};
+	int *ptr_no_p_cmd = &no_parsed_cmd;
 
 	// start shell 
     init_shell(); 
@@ -226,19 +308,21 @@ int main()
             continue;		
 		}
 
-		execution_flag = process_user_input(user_input, parsed_arguments, parsed_arguments_piped);
-		//printf("\nexecution flag: %d", execution_flag);
+		execution_flag = process_user_input(user_input, parsed_arguments, parsed_arguments_piped, ptr_no_p_cmd, cmd);
+		printf("\nno of piped commands: %d", no_parsed_cmd);
 		// returns zero if there's no command or it's a builtin
 		// 1 if it is a simple command
 		// 2 if it includes a pipe
 
 		// execute
 		if (execution_flag == 1) {
-			execute_commands(parsed_arguments);
+			execute_commands(cmd[0].argv);
 		}
 		
 		if (execution_flag == 2) {
-			execute_piped_commands(parsed_arguments, parsed_arguments_piped);
+			fork_pipes(*ptr_no_p_cmd, cmd);
+			wait(NULL);
+			wait(NULL);
 		}
          
     } 
